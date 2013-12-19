@@ -29,7 +29,10 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
         raise Fluent::ConfigError, "${tag_parts[n]} and __TAG_PARTS[n]__ placeholder does not support range specify at #{key} #{conf[key]}"
       end
 
-      @rewriterules.push([rewritekey, /#{trim_regex_quote(regexp)}/, get_match_operator(regexp), rewritetag])
+      include_backreference = !rewritetag.match(/\$\d+/).nil?
+      include_placeholder = !rewritetag.match(/(\${[a-z_]+(\[[0-9]+\])?}|__[A-Z_]+__)/).nil?
+
+      @rewriterules.push([rewritekey, /#{trim_regex_quote(regexp)}/, get_match_operator(regexp), rewritetag, include_backreference, include_placeholder])
       rewriterule_names.push(rewritekey + regexp)
       $log.info "adding rewrite_tag_filter rule: #{key} #{@rewriterules.last}"
     end
@@ -59,7 +62,7 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
   end
 
   def rewrite_tag(tag, record, placeholder)
-    @rewriterules.each do |rewritekey, regexp, match_operator, rewritetag|
+    @rewriterules.each do |rewritekey, regexp, match_operator, rewritetag, include_backreference, include_placeholder|
       rewritevalue = record[rewritekey].to_s
       next if rewritevalue.empty? && match_operator != MATCH_OPERATOR_EXCLUDE
       last_match = regexp_last_match(regexp, rewritevalue)
@@ -68,12 +71,16 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
         next if last_match
       else
         next if !last_match
-        backreference_table = get_backreference_table(last_match.captures)
-        rewritetag = rewritetag.gsub(/\$\d+/, backreference_table)
+        if include_backreference
+          backreference_table = get_backreference_table(last_match.captures)
+          rewritetag = rewritetag.gsub(/\$\d+/, backreference_table)
+        end
       end
-      rewritetag = rewritetag.gsub(/(\${[a-z_]+(\[[0-9]+\])?}|__[A-Z_]+__)/) do
-        $log.warn "rewrite_tag_filter: unknown placeholder found. :placeholder=>#{$1} :tag=>#{tag} :rewritetag=>#{rewritetag}" unless placeholder.include?($1)
-        placeholder[$1]
+      if include_placeholder
+        rewritetag = rewritetag.gsub(/(\${[a-z_]+(\[[0-9]+\])?}|__[A-Z_]+__)/) do
+          $log.warn "rewrite_tag_filter: unknown placeholder found. :placeholder=>#{$1} :tag=>#{tag} :rewritetag=>#{rewritetag}" unless placeholder.include?($1)
+          placeholder[$1]
+        end
       end
       return rewritetag
     end
