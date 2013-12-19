@@ -5,8 +5,6 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
   config_param :remove_tag_prefix, :string, :default => nil
   config_param :hostname_command, :string, :default => 'hostname'
 
-  MATCH_OPERATOR_EXCLUDE = '!'
-
   def initialize
     super
     require 'string/scrub'
@@ -20,8 +18,8 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
     @hostname = `#{@hostname_command}`.chomp
 
     conf.keys.select{|k| k =~ /^rewriterule(\d+)$/}.sort_by{|i| i.sub('rewriterule', '').to_i}.each do |key|
-      rewritekey,regexp,rewritetag = parse_rewriterule(conf[key])
-      if regexp.nil? || rewritetag.nil?
+      rewritekey,rewritecondition,rewritetag = parse_rewriterule(conf[key])
+      if rewritecondition.nil? || rewritetag.nil?
         raise Fluent::ConfigError, "failed to parse rewriterules at #{key} #{conf[key]}"
       end
 
@@ -32,8 +30,13 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
       include_backreference = !rewritetag.match(/\$\d+/).nil?
       include_placeholder = !rewritetag.match(/(\${[a-z_]+(\[[0-9]+\])?}|__[A-Z_]+__)/).nil?
 
-      @rewriterules.push([rewritekey, /#{trim_regex_quote(regexp)}/, get_match_operator(regexp), rewritetag, include_backreference, include_placeholder])
-      rewriterule_names.push(rewritekey + regexp)
+      match_inverse,match_operator,match_value = parse_rewritecondition(rewritecondition)
+      if match_operator != :match_operator_regexp && include_backreference
+        raise Fluent::ConfigError, "comparison feature does not support backreference at #{key} #{conf[key]}"
+      end
+
+      @rewriterules.push([rewritekey, match_inverse, match_operator, match_value, rewritetag, include_backreference, include_placeholder])
+      rewriterule_names.push(rewritekey + rewritecondition)
       $log.info "adding rewrite_tag_filter rule: #{key} #{@rewriterules.last}"
     end
 
@@ -62,19 +65,14 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
   end
 
   def rewrite_tag(tag, record, placeholder)
-    @rewriterules.each do |rewritekey, regexp, match_operator, rewritetag, include_backreference, include_placeholder|
-      rewritevalue = record[rewritekey].to_s
-      next if rewritevalue.empty? && match_operator != MATCH_OPERATOR_EXCLUDE
-      last_match = regexp_last_match(regexp, rewritevalue)
-      case match_operator
-      when MATCH_OPERATOR_EXCLUDE
-        next if last_match
-      else
-        next if !last_match
-        if include_backreference
-          backreference_table = get_backreference_table(last_match.captures)
-          rewritetag = rewritetag.gsub(/\$\d+/, backreference_table)
-        end
+    @rewriterules.each do |rewritekey, match_inverse, match_operator, match_value, rewritetag, include_backreference, include_placeholder|
+      rewritevalue = record[rewritekey]
+      match_result = send(match_operator, rewritevalue, match_value) unless rewritevalue.nil?
+      next unless !!match_result ^ match_inverse
+
+      if include_backreference
+        backreference_table = get_backreference_table(match_result.captures)
+        rewritetag = rewritetag.gsub(/\$\d+/, backreference_table)
       end
       if include_placeholder
         rewritetag = rewritetag.gsub(/(\${[a-z_]+(\[[0-9]+\])?}|__[A-Z_]+__)/) do
@@ -105,20 +103,43 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
     end
   end
 
-  def trim_regex_quote(regexp)
-    if regexp.start_with?('"') && regexp.end_with?('"')
-      $log.info "rewrite_tag_filter: [DEPRECATED] Use ^....$ pattern for partial word match instead of double-quote-delimiter. #{regexp}"
-      regexp = regexp[1..-2]
-    end
-    if regexp.start_with?(MATCH_OPERATOR_EXCLUDE)
-      regexp = regexp[1, regexp.length]
-    end
-    return regexp
+  def parse_rewritecondition(condition)
+    condition = trim_condition_quote(condition)
+    scanner = StringScanner.new(condition)
+    match_inverse = !!scanner.scan(/!/)
+    match_operator, match_value =
+      if scanner.scan(/\-(lt|le|gt|ge|eq|ne)/)
+        match_value = scanner.post_match
+        case scanner.matched
+        when '-lt' then [:match_operator_str_lt, match_value]
+        when '-le' then [:match_operator_str_le, match_value]
+        when '-gt' then [:match_operator_str_gt, match_value]
+        when '-ge' then [:match_operator_str_ge, match_value]
+        when '-eq' then [:match_operator_str_eq, match_value]
+        end
+      elsif scanner.scan(/(<=|<|>=|>|=)/)
+        match_value = scanner.post_match.to_i
+        case scanner.matched
+        when '<'  then [:match_operator_int_lt, match_value]
+        when '<=' then [:match_operator_int_le, match_value]
+        when '>'  then [:match_operator_int_gt, match_value]
+        when '>=' then [:match_operator_int_ge, match_value]
+        when '='  then [:match_operator_int_eq, match_value]
+        end
+      else
+        regexp = scanner.rest
+        [:match_operator_regexp, /#{regexp}/]
+      end
+
+    return [match_inverse, match_operator, match_value]
   end
 
-  def get_match_operator(regexp)
-    return MATCH_OPERATOR_EXCLUDE if regexp.start_with?(MATCH_OPERATOR_EXCLUDE)
-    return ''
+  def trim_condition_quote(condition)
+    if condition.start_with?('"') && condition.end_with?('"')
+      $log.info "rewrite_tag_filter: [DEPRECATED] Use ^....$ pattern for partial word match instead of double-quote-delimiter. #{condition}"
+      condition = condition[1..-2]
+    end
+    return condition
   end
 
   def get_backreference_table(elements)
@@ -146,4 +167,17 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
 
     return result
   end
+
+  def match_operator_str_lt(rewritevalue, match_value); rewritevalue.to_s <  match_value end
+  def match_operator_str_le(rewritevalue, match_value); rewritevalue.to_s <= match_value end
+  def match_operator_str_gt(rewritevalue, match_value); rewritevalue.to_s >  match_value end
+  def match_operator_str_ge(rewritevalue, match_value); rewritevalue.to_s >= match_value end
+  def match_operator_str_eq(rewritevalue, match_value); rewritevalue.to_s == match_value end
+  def match_operator_int_lt(rewritevalue, match_value); rewritevalue.to_i <  match_value end
+  def match_operator_int_le(rewritevalue, match_value); rewritevalue.to_i <= match_value end
+  def match_operator_int_gt(rewritevalue, match_value); rewritevalue.to_i >  match_value end
+  def match_operator_int_ge(rewritevalue, match_value); rewritevalue.to_i >= match_value end
+  def match_operator_int_eq(rewritevalue, match_value); rewritevalue.to_i == match_value end
+  def match_operator_regexp(rewritevalue, regexp); regexp_last_match(regexp, rewritevalue.to_s) end
+
 end
