@@ -168,16 +168,16 @@ class Fluent::RewriteTagFilterOutput < Fluent::Output
     return result
   end
 
-  def match_operator_str_lt(rewritevalue, match_value); rewritevalue.to_s <  match_value end
-  def match_operator_str_le(rewritevalue, match_value); rewritevalue.to_s <= match_value end
-  def match_operator_str_gt(rewritevalue, match_value); rewritevalue.to_s >  match_value end
-  def match_operator_str_ge(rewritevalue, match_value); rewritevalue.to_s >= match_value end
-  def match_operator_str_eq(rewritevalue, match_value); rewritevalue.to_s == match_value end
-  def match_operator_int_lt(rewritevalue, match_value); rewritevalue.to_i <  match_value end
-  def match_operator_int_le(rewritevalue, match_value); rewritevalue.to_i <= match_value end
-  def match_operator_int_gt(rewritevalue, match_value); rewritevalue.to_i >  match_value end
-  def match_operator_int_ge(rewritevalue, match_value); rewritevalue.to_i >= match_value end
-  def match_operator_int_eq(rewritevalue, match_value); rewritevalue.to_i == match_value end
-  def match_operator_regexp(rewritevalue, regexp); regexp_last_match(regexp, rewritevalue.to_s) end
+  def match_operator_str_lt(rewritevalue, match_value); rewritevalue.to_s <  match_value if rewritevalue.respond_to?(:to_s) end
+  def match_operator_str_le(rewritevalue, match_value); rewritevalue.to_s <= match_value if rewritevalue.respond_to?(:to_s) end
+  def match_operator_str_gt(rewritevalue, match_value); rewritevalue.to_s >  match_value if rewritevalue.respond_to?(:to_s) end
+  def match_operator_str_ge(rewritevalue, match_value); rewritevalue.to_s >= match_value if rewritevalue.respond_to?(:to_s) end
+  def match_operator_str_eq(rewritevalue, match_value); rewritevalue.to_s == match_value if rewritevalue.respond_to?(:to_s) end
+  def match_operator_int_lt(rewritevalue, match_value); rewritevalue.to_i <  match_value if rewritevalue.respond_to?(:to_i) end
+  def match_operator_int_le(rewritevalue, match_value); rewritevalue.to_i <= match_value if rewritevalue.respond_to?(:to_i) end
+  def match_operator_int_gt(rewritevalue, match_value); rewritevalue.to_i >  match_value if rewritevalue.respond_to?(:to_i) end
+  def match_operator_int_ge(rewritevalue, match_value); rewritevalue.to_i >= match_value if rewritevalue.respond_to?(:to_i) end
+  def match_operator_int_eq(rewritevalue, match_value); rewritevalue.to_i == match_value if rewritevalue.respond_to?(:to_i) end
+  def match_operator_regexp(rewritevalue, regexp); regexp_last_match(regexp, rewritevalue.to_s) if rewritevalue.respond_to?(:to_s) end
 
 end
